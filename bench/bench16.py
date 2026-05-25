@@ -40,12 +40,12 @@ LOWER_BOUND = -3
 UPPER_BOUND = 7
 
 SCALESWEEP_CONFIGS = [
-    triton.Config({"BLOCKS_PER_PROGRAM": 32, "NUM_STAGES": 2}, num_warps=1, num_stages=2),
-    triton.Config({"BLOCKS_PER_PROGRAM": 64, "NUM_STAGES": 2}, num_warps=2, num_stages=2),
-    triton.Config({"BLOCKS_PER_PROGRAM": 128, "NUM_STAGES": 2}, num_warps=4, num_stages=2),
-    triton.Config({"BLOCKS_PER_PROGRAM": 256, "NUM_STAGES": 2}, num_warps=8, num_stages=2),
-    triton.Config({"BLOCKS_PER_PROGRAM": 512, "NUM_STAGES": 2}, num_warps=16, num_stages=2),
-    triton.Config({"BLOCKS_PER_PROGRAM": 1024, "NUM_STAGES": 2}, num_warps=32, num_stages=2),
+    triton.Config({"BLOCKS_PER_PROGRAM": 32, "NUM_STAGES": 2}, num_warps=1),
+    triton.Config({"BLOCKS_PER_PROGRAM": 64, "NUM_STAGES": 2}, num_warps=2),
+    triton.Config({"BLOCKS_PER_PROGRAM": 128, "NUM_STAGES": 2}, num_warps=4),
+    triton.Config({"BLOCKS_PER_PROGRAM": 256, "NUM_STAGES": 2}, num_warps=8),
+    triton.Config({"BLOCKS_PER_PROGRAM": 512, "NUM_STAGES": 2}, num_warps=16),
+    triton.Config({"BLOCKS_PER_PROGRAM": 1024, "NUM_STAGES": 2}, num_warps=32),
 ]
 
 @triton.autotune(
@@ -211,6 +211,7 @@ def main():
     print(f"[triton.ScaleSweep [{LOWER_BOUND}, {UPPER_BOUND}]] [SM {sm_count}]")
 
     for NUM_PROGRAMS in [sm_count, sm_count * 2, sm_count * 4]:
+        print(f"NUM_PROGRAMS = {NUM_PROGRAMS}")
         for bsz in [1, 16, 32, 64, 128, 256, 512, 1024, 4096, 8192]:
             weight = make_w(bsz, 8192)
             global_scale, global_scale_inv = get_nvfp4_global_scales(weight, FP8_MAX=256)

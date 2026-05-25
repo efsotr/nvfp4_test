@@ -1,4 +1,4 @@
-from fouroversix.quantize.cuda.ops import quantize as cuda_quantize
+from fouroversix.quantize.cuda.ops import quantize_to_fp4 as cuda_quantize
 
 from helper import (
     check_sm100,

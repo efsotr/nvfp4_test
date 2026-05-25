@@ -1,3 +1,4 @@
+import torch
 from vllm._custom_ops import scaled_fp4_quant
 
 from helper import (
@@ -42,7 +43,6 @@ def main():
         global_scale, global_scale_inv = get_nvfp4_global_scales(W)
 
         (q, s), ms = time_cuda(lambda: scaled_fp4_quant(W, global_scale_inv))
-
         s = unswizzle_vllm_fp4_scale(s, m=W.shape[0], n=W.shape[1], block_size=16)
 
         W_hat = dequantize("base", q, s, global_scale, high_first=False)
