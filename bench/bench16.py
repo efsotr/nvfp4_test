@@ -1,12 +1,9 @@
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--load", type=str, choices=["no_trans", "sep", "trans"], default="sep")
+parser.add_argument("--load", type=str, choices=["default", "sep", "trans"], default="sep")
+parser.add_argument("--mse", type=str, choices=["direct", "default"], default="default")
 args = parser.parse_args()
 print(args)
-
-import torch
-import triton
-import triton.language as tl
 
 from helper import (
     check_sm100,
@@ -22,11 +19,12 @@ from helper16 import (
     _load_16_cols_2d_trans,
     _max_abs_16,
     _mse_after_e2m1_roundtrip_16_cols,
+    _mse_after_e2m1_roundtrip_16_cols_direct,
     _pack_final_code_16_cols,
 )
 
 LOAD_FN = None
-if args.load == "no_trans":
+if args.load == "default":
     LOAD_FN = _load_16_cols_2d
 elif args.load == "sep":
     LOAD_FN = _load_16_cols_2d_seperate
@@ -34,6 +32,22 @@ elif args.load == "trans":
     LOAD_FN = _load_16_cols_2d_trans
 else:
     raise NotImplementedError(f"unsupported --load {args.load}")
+
+MSE_FN = None
+if args.mse == "default":
+    MSE_FN = _mse_after_e2m1_roundtrip_16_cols
+elif args.mse == "direct":
+    MSE_FN = _mse_after_e2m1_roundtrip_16_cols_direct
+else:
+    raise NotImplementedError(f"unsupported --mse {args.mse}")
+
+sm_count = torch.cuda.get_device_properties("cuda").multi_processor_count
+NUM_PROGRAMS_LIST = [sm_count, sm_count * 2, sm_count * 4]
+bsz_list = [1, 16, 32, 64, 128, 256, 512, 1024, 4096, 8192]
+
+import torch
+import triton
+import triton.language as tl
 
 BLOCK_SIZE = 16
 LOWER_BOUND = -3
@@ -110,7 +124,7 @@ def scalesweep_quantize_kernel(
             scale_i = scale_fp8.to(tl.float32)
             inv_scale_i = 1.0 / scale_i
 
-            mse_i = _mse_after_e2m1_roundtrip_16_cols(
+            mse_i = MSE_FN(
                 v0, v1, v2, v3,
                 v4, v5, v6, v7,
                 v8, v9, v10, v11,
@@ -207,12 +221,11 @@ def scalesweep_quantize(
 
 def main():
     check_sm100()
-    sm_count = torch.cuda.get_device_properties(weight.device).multi_processor_count
     print(f"[triton.ScaleSweep [{LOWER_BOUND}, {UPPER_BOUND}]] [SM {sm_count}]")
 
-    for NUM_PROGRAMS in [sm_count, sm_count * 2, sm_count * 4]:
+    for NUM_PROGRAMS in NUM_PROGRAMS_LIST:
         print(f"NUM_PROGRAMS = {NUM_PROGRAMS}")
-        for bsz in [1, 16, 32, 64, 128, 256, 512, 1024, 4096, 8192]:
+        for bsz in bsz_list:
             weight = make_w(bsz, 8192)
             global_scale, global_scale_inv = get_nvfp4_global_scales(weight, FP8_MAX=256)
 

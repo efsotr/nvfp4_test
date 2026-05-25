@@ -2,6 +2,65 @@ import triton
 import triton.language as tl
 
 @triton.jit
+def _fp32x16_to_e2m1_u32x2(
+    x0, x1, x2, x3,
+    x4, x5, x6, x7,
+    x8, x9, x10, x11,
+    x12, x13, x14, x15,
+):
+    """
+    Performance path for final FP4 code.
+
+    16 fp32 -> 16 e2m1 -> two uint32:
+      lo = bytes for x0..x7
+      hi = bytes for x8..x15
+
+    Final code layout:
+      uint8 view of [lo, hi] gives 8 packed bytes.
+    """
+    lo, hi = tl.inline_asm_elementwise(
+        asm="""
+        {
+          .reg .b8 b0;
+          .reg .b8 b1;
+          .reg .b8 b2;
+          .reg .b8 b3;
+          .reg .b8 b4;
+          .reg .b8 b5;
+          .reg .b8 b6;
+          .reg .b8 b7;
+
+          cvt.rn.satfinite.e2m1x2.f32 b0,  $3,  $2;
+          cvt.rn.satfinite.e2m1x2.f32 b1,  $5,  $4;
+          cvt.rn.satfinite.e2m1x2.f32 b2,  $7,  $6;
+          cvt.rn.satfinite.e2m1x2.f32 b3,  $9,  $8;
+          cvt.rn.satfinite.e2m1x2.f32 b4,  $11, $10;
+          cvt.rn.satfinite.e2m1x2.f32 b5,  $13, $12;
+          cvt.rn.satfinite.e2m1x2.f32 b6,  $15, $14;
+          cvt.rn.satfinite.e2m1x2.f32 b7,  $17, $16;
+
+          mov.b32 $0, {b0, b1, b2, b3};
+          mov.b32 $1, {b4, b5, b6, b7};
+        }
+        """,
+        constraints=(
+            "=r,=r,"
+            "f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f"
+        ),
+        args=[
+            x0, x1, x2, x3,
+            x4, x5, x6, x7,
+            x8, x9, x10, x11,
+            x12, x13, x14, x15,
+        ],
+        dtype=(tl.uint32, tl.uint32),
+        is_pure=True,
+        pack=1,
+    )
+
+    return lo, hi
+
+@triton.jit
 def _f16x2_u32_to_fp32_pair(h):
     lo_f32, hi_f32 = tl.inline_asm_elementwise(
         asm=r"""
@@ -111,66 +170,6 @@ def _fp32x16_to_e2m1_roundtrip_fp32x16(
 
 
 @triton.jit
-def _fp32x16_to_e2m1_u32x2(
-    x0, x1, x2, x3,
-    x4, x5, x6, x7,
-    x8, x9, x10, x11,
-    x12, x13, x14, x15,
-):
-    """
-    Performance path for final FP4 code.
-
-    16 fp32 -> 16 e2m1 -> two uint32:
-      lo = bytes for x0..x7
-      hi = bytes for x8..x15
-
-    Final code layout:
-      uint8 view of [lo, hi] gives 8 packed bytes.
-    """
-    lo, hi = tl.inline_asm_elementwise(
-        asm="""
-        {
-          .reg .b8 b0;
-          .reg .b8 b1;
-          .reg .b8 b2;
-          .reg .b8 b3;
-          .reg .b8 b4;
-          .reg .b8 b5;
-          .reg .b8 b6;
-          .reg .b8 b7;
-
-          cvt.rn.satfinite.e2m1x2.f32 b0,  $3,  $2;
-          cvt.rn.satfinite.e2m1x2.f32 b1,  $5,  $4;
-          cvt.rn.satfinite.e2m1x2.f32 b2,  $7,  $6;
-          cvt.rn.satfinite.e2m1x2.f32 b3,  $9,  $8;
-          cvt.rn.satfinite.e2m1x2.f32 b4,  $11, $10;
-          cvt.rn.satfinite.e2m1x2.f32 b5,  $13, $12;
-          cvt.rn.satfinite.e2m1x2.f32 b6,  $15, $14;
-          cvt.rn.satfinite.e2m1x2.f32 b7,  $17, $16;
-
-          mov.b32 $0, {b0, b1, b2, b3};
-          mov.b32 $1, {b4, b5, b6, b7};
-        }
-        """,
-        constraints=(
-            "=r,=r,"
-            "f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f"
-        ),
-        args=[
-            x0, x1, x2, x3,
-            x4, x5, x6, x7,
-            x8, x9, x10, x11,
-            x12, x13, x14, x15,
-        ],
-        dtype=(tl.uint32, tl.uint32),
-        is_pure=True,
-        pack=1,
-    )
-
-    return lo, hi
-
-
-@triton.jit
 def _mse_after_e2m1_roundtrip_16_cols(
     v0, v1, v2, v3,
     v4, v5, v6, v7,
@@ -242,6 +241,103 @@ def _mse_after_e2m1_roundtrip_16_cols(
         + (e12 * e12 + e13 * e13) + (e14 * e14 + e15 * e15))
     ) * (scale * scale)
 
+@triton.jit
+def _fp32_pair_to_e2m1_roundtrip_se(x0, x1):
+    se = tl.inline_asm_elementwise(
+        asm=r"""
+        {
+          .reg .b8  b;
+          .reg .b32 h;
+          .reg .b16 lo;
+          .reg .b16 hi;
+          .reg .f32 q0;
+          .reg .f32 q1;
+          .reg .f32 d0;
+          .reg .f32 d1;
+
+          cvt.rn.satfinite.e2m1x2.f32 b, $2, $1;
+          cvt.rn.f16x2.e2m1x2 h, b;
+
+          mov.b32 {lo, hi}, h;
+          cvt.f32.f16 q0, lo;
+          cvt.f32.f16 q1, hi;
+
+          sub.rn.f32 d0, q0, $1;
+          sub.rn.f32 d1, q1, $2;
+          mul.rn.f32 d0, d0, d0;
+          fma.rn.f32 $0, d1, d1, d0;
+        }
+        """,
+        constraints="=f,f,f",
+        args=[x0, x1],
+        dtype=tl.float32,
+        is_pure=True,
+        pack=1,
+    )
+    return se
+
+@triton.jit
+def _fp32x16_to_e2m1_roundtrip_se(
+    x0, x1, x2, x3,
+    x4, x5, x6, x7,
+    x8, x9, x10, x11,
+    x12, x13, x14, x15,
+):
+    s01 = _fp32_pair_to_e2m1_roundtrip_se(x0, x1)
+    s23 = _fp32_pair_to_e2m1_roundtrip_se(x2, x3)
+    s45 = _fp32_pair_to_e2m1_roundtrip_se(x4, x5)
+    s67 = _fp32_pair_to_e2m1_roundtrip_se(x6, x7)
+    s89 = _fp32_pair_to_e2m1_roundtrip_se(x8, x9)
+    sAB = _fp32_pair_to_e2m1_roundtrip_se(x10, x11)
+    sCD = _fp32_pair_to_e2m1_roundtrip_se(x12, x13)
+    sEF = _fp32_pair_to_e2m1_roundtrip_se(x14, x15)
+
+    return s01 + s23 + s45 + s67 + s89 + sAB + sCD + sEF
+
+
+@triton.jit
+def _mse_after_e2m1_roundtrip_16_cols_direct(
+    v0, v1, v2, v3,
+    v4, v5, v6, v7,
+    v8, v9, v10, v11,
+    v12, v13, v14, v15,
+    inv_scale,
+    scale,
+):
+    """
+    v0..v15:   each [BLOCKS_PER_PROGRAM], already global-scale normalized.
+    inv_scale: [BLOCKS_PER_PROGRAM]
+    scale:     [BLOCKS_PER_PROGRAM]
+
+    Computes:
+      x = vals / scale
+      q = e2m1_round(x)
+      mse = sum((q - x)^2) * scale^2
+    """
+    x0 = v0 * inv_scale
+    x1 = v1 * inv_scale
+    x2 = v2 * inv_scale
+    x3 = v3 * inv_scale
+    x4 = v4 * inv_scale
+    x5 = v5 * inv_scale
+    x6 = v6 * inv_scale
+    x7 = v7 * inv_scale
+    x8 = v8 * inv_scale
+    x9 = v9 * inv_scale
+    x10 = v10 * inv_scale
+    x11 = v11 * inv_scale
+    x12 = v12 * inv_scale
+    x13 = v13 * inv_scale
+    x14 = v14 * inv_scale
+    x15 = v15 * inv_scale
+
+    se = _fp32x16_to_e2m1_roundtrip_se(
+        x0, x1, x2, x3,
+        x4, x5, x6, x7,
+        x8, x9, x10, x11,
+        x12, x13, x14, x15,
+    )
+    return se * (scale * scale)
 
 @triton.jit
 def _pack_final_code_16_cols(
