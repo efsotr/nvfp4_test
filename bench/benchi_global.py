@@ -571,7 +571,7 @@ def main():
             print(f"mse           = {mse:.8e}")
             print(f"weighted_mse  = {weighted_mse:.8e}")
             print(f"max_abs_error = {max_abs_error:.8e}")
-            print()
+            print(flush=True)
 
 
 if __name__ == "__main__":

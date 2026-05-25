@@ -248,7 +248,7 @@ def main():
             print(f"latency_ms    = {ms:.6f}")
             print(f"mse           = {mse:.8e}")
             print(f"max_abs_error = {max_abs_error:.8e}")
-            print()
+            print(flush=True)
 
 if __name__ == "__main__":
     main()
