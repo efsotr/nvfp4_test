@@ -1,5 +1,3 @@
-from re import S
-
 import torch
 import triton
 import triton.language as tl
@@ -10,32 +8,45 @@ from helper import (
     error_stats,
     get_nvfp4_global_scales,
     make_w,
-    print_result,
     time_cuda,
 )
 
 
 BLOCK_SIZE = 16
-LOWER_BOUND = -8
+LOWER_BOUND = -3
 UPPER_BOUND = 7
 PERSISTENT_LAUNCH_BLOCKS_CAP = 4
 MAX_BLOCKS_PER_WARP = 16
 
 SCALESWEEP_CONFIGS = [
-    triton.Config({"BLOCKS_PER_PROGRAM": 32}, num_warps=1, num_stages=3),
-    triton.Config({"BLOCKS_PER_PROGRAM": 64}, num_warps=2, num_stages=3),
-    triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=4, num_stages=3),
-    triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=8, num_stages=3),
-    triton.Config({"BLOCKS_PER_PROGRAM": 512}, num_warps=16, num_stages=3),
-    triton.Config({"BLOCKS_PER_PROGRAM": 1024}, num_warps=32, num_stages=3),
+    triton.Config({"BLOCKS_PER_PROGRAM": 32}, num_warps=1, num_stages=2),
+    triton.Config({"BLOCKS_PER_PROGRAM": 64}, num_warps=2, num_stages=2),
+    triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=4, num_stages=2),
+    triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=8, num_stages=2),
+    triton.Config({"BLOCKS_PER_PROGRAM": 512}, num_warps=16, num_stages=2),
+    triton.Config({"BLOCKS_PER_PROGRAM": 1024}, num_warps=32, num_stages=2),
 ]
 
 
 @triton.jit
 def _f16x2_u32_to_fp32_pair(h):
-    lo = (h & 0xFFFF).to(tl.uint16).to(tl.float16, bitcast=True).to(tl.float32)
-    hi = (h >> 16).to(tl.uint16).to(tl.float16, bitcast=True).to(tl.float32)
-    return lo, hi
+    lo_f32, hi_f32 = tl.inline_asm_elementwise(
+        asm=r"""
+        {
+        .reg .b16 lo;
+        .reg .b16 hi;
+        mov.b32 {lo, hi}, $2;
+        cvt.f32.f16 $0, lo;
+        cvt.f32.f16 $1, hi;
+        }
+        """,
+        constraints="=f,=f,r",
+        args=[h],
+        dtype=(tl.float32, tl.float32),
+        is_pure=True,
+        pack=1,
+    )
+    return lo_f32, hi_f32
 
 
 @triton.jit
@@ -325,36 +336,42 @@ def _max_abs_16(
 
     return tl.maximum(m0123, m4567)
 
+@triton.jit
+def _load_16_cols_2d(
+    ptr,
+    block_offsets,
+    block_mask,
+    global_scale_inv,
+):
+    base_elem = block_offsets * 16
 
-def _runtime_blocks_per_sm(block_threads, device=None):
-    if device is None:
-        device = torch.cuda.current_device()
-    props = torch.cuda.get_device_properties(device)
-    max_threads_per_sm = getattr(props, "max_threads_per_multi_processor", 2048)
-    blocks = max_threads_per_sm // block_threads if block_threads > 0 else 1
-    return max(1, min(blocks, PERSISTENT_LAUNCH_BLOCKS_CAP))
+    v0 = tl.load(ptr + base_elem + 0, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v1 = tl.load(ptr + base_elem + 1, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v2 = tl.load(ptr + base_elem + 2, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v3 = tl.load(ptr + base_elem + 3, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v4 = tl.load(ptr + base_elem + 4, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v5 = tl.load(ptr + base_elem + 5, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v6 = tl.load(ptr + base_elem + 6, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v7 = tl.load(ptr + base_elem + 7, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v8 = tl.load(ptr + base_elem + 8, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v9 = tl.load(ptr + base_elem + 9, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v10 = tl.load(ptr + base_elem + 10, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v11 = tl.load(ptr + base_elem + 11, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v12 = tl.load(ptr + base_elem + 12, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v13 = tl.load(ptr + base_elem + 13, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v14 = tl.load(ptr + base_elem + 14, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
+    v15 = tl.load(ptr + base_elem + 15, mask=block_mask, other=0.0).to(tl.float32) * global_scale_inv
 
-
-def persistent_grid(num_blocks, device, config):
-    blocks_per_program = config.kwargs["BLOCKS_PER_PROGRAM"]
-
-    if blocks_per_program > config.num_warps * MAX_BLOCKS_PER_WARP:
-        raise ValueError(
-            "ScaleSweep configurations require BLOCKS_PER_PROGRAM <= "
-            f"num_warps * {MAX_BLOCKS_PER_WARP}; got blocks={blocks_per_program}, "
-            f"warps={config.num_warps}"
-        )
-
-    block_threads = config.num_warps * 32
-    num_programs = triton.cdiv(num_blocks, blocks_per_program)
-    blocks_per_sm = _runtime_blocks_per_sm(block_threads, device)
-    sm_count = torch.cuda.get_device_properties(device).multi_processor_count
-
-    return min(num_programs, max(1, sm_count * blocks_per_sm))
+    return (
+        v0, v1, v2, v3,
+        v4, v5, v6, v7,
+        v8, v9, v10, v11,
+        v12, v13, v14, v15,
+    )
 
 @triton.autotune(
     configs=SCALESWEEP_CONFIGS,
-    key=["num_blocks", "grid_size", "LOWER_BOUND", "NUM_CANDIDATES"],
+    key=["NUM_BLOCKS", "NUM_PROGRAMS", "LOWER_BOUND", "NUM_CANDIDATES"],
 )
 @triton.jit
 def scalesweep_quantize_kernel(
@@ -362,8 +379,8 @@ def scalesweep_quantize_kernel(
     scale_ptr,
     code_i32_ptr,
     global_scale_inv_ptr,
-    num_blocks: tl.constexpr,
-    grid_size: tl.constexpr,
+    NUM_BLOCKS: tl.constexpr,
+    NUM_PROGRAMS: tl.constexpr,
     LOWER_BOUND: tl.constexpr,
     NUM_CANDIDATES: tl.constexpr,
     BLOCKS_PER_PROGRAM: tl.constexpr,
@@ -373,93 +390,22 @@ def scalesweep_quantize_kernel(
     pid = tl.program_id(0)
     block_start = pid * BLOCKS_PER_PROGRAM
 
-    while block_start < num_blocks:
+    while block_start < NUM_BLOCKS:
         block_offsets = block_start + tl.arange(0, BLOCKS_PER_PROGRAM)
-        block_mask = block_offsets < num_blocks
+        block_mask = block_offsets < NUM_BLOCKS
 
-        base_elem = block_offsets * 16
-
-        v0 = (
-            tl.load(weight_ptr + base_elem + 0, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
+        (
+            v0, v1, v2, v3,
+            v4, v5, v6, v7,
+            v8, v9, v10, v11,
+            v12, v13, v14, v15,
+        ) = _load_16_cols_2d(
+            weight_ptr,
+            block_offsets,
+            block_mask,
+            global_scale_inv,
         )
-        v1 = (
-            tl.load(weight_ptr + base_elem + 1, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v2 = (
-            tl.load(weight_ptr + base_elem + 2, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v3 = (
-            tl.load(weight_ptr + base_elem + 3, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v4 = (
-            tl.load(weight_ptr + base_elem + 4, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v5 = (
-            tl.load(weight_ptr + base_elem + 5, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v6 = (
-            tl.load(weight_ptr + base_elem + 6, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v7 = (
-            tl.load(weight_ptr + base_elem + 7, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v8 = (
-            tl.load(weight_ptr + base_elem + 8, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v9 = (
-            tl.load(weight_ptr + base_elem + 9, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v10 = (
-            tl.load(weight_ptr + base_elem + 10, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v11 = (
-            tl.load(weight_ptr + base_elem + 11, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v12 = (
-            tl.load(weight_ptr + base_elem + 12, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v13 = (
-            tl.load(weight_ptr + base_elem + 13, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v14 = (
-            tl.load(weight_ptr + base_elem + 14, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-        v15 = (
-            tl.load(weight_ptr + base_elem + 15, mask=block_mask, other=0.0)
-            .to(tl.float32)
-            * global_scale_inv
-        )
-
+        
         abs_max = _max_abs_16(
             v0, v1, v2, v3,
             v4, v5, v6, v7,
@@ -526,7 +472,7 @@ def scalesweep_quantize_kernel(
             mask=block_mask,
         )
 
-        block_start += grid_size * BLOCKS_PER_PROGRAM
+        block_start += NUM_PROGRAMS * BLOCKS_PER_PROGRAM
 
 
 def scalesweep_quantize(
@@ -535,7 +481,7 @@ def scalesweep_quantize(
     block_size,
     lower_bound,
     upper_bound,
-    config,
+    NUM_PROGRAMS,
 ):
     if block_size != 16:
         raise ValueError("optimized kernel is specialized for block_size == 16")
@@ -558,15 +504,13 @@ def scalesweep_quantize(
         dtype=torch.int32,
     )
 
-    num_programs = persistent_grid(num_blocks, weight.device, config)
-
-    scalesweep_quantize_kernel[(num_programs,)](
+    scalesweep_quantize_kernel[(NUM_PROGRAMS,)](
         weight,
         scale,
         code_i32,
         global_scale_inv,
         num_blocks,
-        num_programs,
+        NUM_PROGRAMS,
         LOWER_BOUND=lower_bound,
         NUM_CANDIDATES=upper_bound - lower_bound + 1,
     )
@@ -583,11 +527,12 @@ def main():
     check_sm100()
     sm_count = torch.cuda.get_device_properties(weight.device).multi_processor_count
     print(f"[triton.ScaleSweep [{LOWER_BOUND}, {UPPER_BOUND}]] [SM {sm_count}]")
-    for bsz in [1, 16, 32, 64, 128, 256, 512, 1024, 4096, 8192]:
-        weight = make_w(bsz, 8192)
-        global_scale, global_scale_inv = get_nvfp4_global_scales(weight, FP8_MAX=256)
 
-        for config in SCALESWEEP_CONFIGS:
+    for NUM_PROGRAMS in [sm_count, sm_count * 2, sm_count * 4]:
+        for bsz in [1, 16, 32, 64, 128, 256, 512, 1024, 4096, 8192]:
+            weight = make_w(bsz, 8192)
+            global_scale, global_scale_inv = get_nvfp4_global_scales(weight, FP8_MAX=256)
+
             (scale, code), ms = time_cuda(
                 lambda: scalesweep_quantize(
                     weight,
@@ -595,7 +540,7 @@ def main():
                     BLOCK_SIZE,
                     LOWER_BOUND,
                     UPPER_BOUND,
-                    config,
+                    NUM_PROGRAMS
                 )
             )
 
