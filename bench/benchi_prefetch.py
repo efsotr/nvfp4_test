@@ -90,7 +90,7 @@ def scalesweep_quantize_kernel(
     BLOCKS_PER_PROGRAM: tl.constexpr,
     NUM_STAGES: tl.constexpr,
 ):
-    imp_local_ptr = tl.load(imp_ptr + tl.arange(0, BLOCKS_PER_OUT * 16)).to(tl.pointer_type(tl.bfloat16))
+    imp_local_ptr = tl.load(imp_ptr + tl.arange(0, BLOCKS_PER_OUT * 16), eviction_policy="evict_last").to(tl.pointer_type(tl.bfloat16))
     global_scale_inv = tl.load(global_scale_inv_ptr)
 
     pid = tl.program_id(0)
