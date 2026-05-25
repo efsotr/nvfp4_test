@@ -57,9 +57,7 @@ def fp4_block_code_sim(x, BLOCK_SIZE: tl.constexpr):
 def fp32_round_to_fp4_value(x):
     ax = tl.abs(x)
     exp = tl.where(ax <= 2.0, 0.5, tl.where(ax <= 4.0, 1.0, 2.0))
-    scaled = x * (1.0 / exp)
-    rounded_mag = tl.floor(tl.abs(scaled) + 0.5)
-    q = tl.where(scaled < 0.0, -rounded_mag, rounded_mag) * exp
+    q = libdevice.round(x / exp) * exp
     return tl.minimum(tl.maximum(q, -6.0), 6.0)
 
 
@@ -119,9 +117,9 @@ def scalesweep_quantize_kernel(
             better = mse_i < best_mse
             best_mse = tl.where(better, mse_i, best_mse)
             best_scale_fp8 = tl.where(better, scale_fp8, best_scale_fp8)
+        tl.store(scale_ptr + block_offsets, best_scale_fp8, mask=block_offsets < num_blocks)
         best_scale_inv = 1.0 / best_scale_fp8.to(tl.float32)
         best_code = fp4_block_code_sim(vals * best_scale_inv[:, None], BLOCK_SIZE)
-        tl.store(scale_ptr + block_offsets, best_scale_fp8, mask=block_offsets < num_blocks)
         tl.store(code_ptr + code_offsets, best_code, mask=mask)
         block_start += grid_size * BLOCKS_PER_PROGRAM
 

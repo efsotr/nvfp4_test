@@ -41,8 +41,8 @@ def time_cuda(fn, warmup=5, iters=20):
     start.record()
     for _ in range(iters):
         out = fn()
-    end.record()
     torch.cuda.synchronize()
+    end.record()
 
     return out, start.elapsed_time(end) / iters
 
