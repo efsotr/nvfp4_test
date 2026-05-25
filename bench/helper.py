@@ -23,9 +23,9 @@ def make_w():
     return torch.randn((M, K), device=DEVICE, dtype=DTYPE).contiguous()
 
 
-def get_nvfp4_global_scales(x):
+def get_nvfp4_global_scales(x, FP8_MAX=FP8_E4M3_MAX_NVFP4):
     amax = x.abs().max().float()
-    global_scale = amax / (FP4_E2M1_MAX * FP8_E4M3_MAX_NVFP4)
+    global_scale = amax / (FP4_E2M1_MAX * FP8_MAX)
     global_scale_inv = global_scale.reciprocal()
     return global_scale, global_scale_inv
 
@@ -41,8 +41,8 @@ def time_cuda(fn, warmup=5, iters=20):
     start.record()
     for _ in range(iters):
         out = fn()
-    torch.cuda.synchronize()
     end.record()
+    torch.cuda.synchronize()
 
     return out, start.elapsed_time(end) / iters
 

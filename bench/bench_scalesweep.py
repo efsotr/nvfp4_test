@@ -18,14 +18,14 @@ BLOCK_SIZE = 16
 LOWER_BOUND = -8
 UPPER_BOUND = 7
 PERSISTENT_LAUNCH_BLOCKS_CAP = 4
+MAX_BLOCKS_PER_WARP = 16
 
 SCALESWEEP_CONFIGS = [
     triton.Config({"BLOCKS_PER_PROGRAM": 64}, num_warps=4, num_stages=3),
-    triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=4, num_stages=3),
     triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=8, num_stages=3),
-    triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=8, num_stages=3),
     triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=16, num_stages=1),
-    triton.Config({"BLOCKS_PER_PROGRAM": 512}, num_warps=16, num_stages=3),
+    triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=16, num_stages=2),
+    triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=16, num_stages=3),
 ]
 
 
@@ -72,6 +72,12 @@ def _runtime_blocks_per_sm(block_threads, device=None):
 
 def persistent_grid(num_blocks, device, config):
     blocks_per_program = config.kwargs["BLOCKS_PER_PROGRAM"]
+    if blocks_per_program > config.num_warps * MAX_BLOCKS_PER_WARP:
+        raise ValueError(
+            "ScaleSweep configurations require BLOCKS_PER_PROGRAM <= "
+            f"num_warps * {MAX_BLOCKS_PER_WARP}; got blocks={blocks_per_program}, "
+            f"warps={config.num_warps}"
+        )
     block_threads = config.num_warps * 32
     num_programs = triton.cdiv(num_blocks, blocks_per_program)
     blocks_per_sm = _runtime_blocks_per_sm(block_threads, device)
@@ -156,7 +162,7 @@ def scalesweep_quantize(weight, global_scale_inv, block_size, lower_bound, upper
 def main():
     # check_sm100()
     weight = make_w()
-    global_scale, global_scale_inv = get_nvfp4_global_scales(weight)
+    global_scale, global_scale_inv = get_nvfp4_global_scales(weight, FP8_MAX=256)
     sm_count = torch.cuda.get_device_properties(weight.device).multi_processor_count
     num_blocks = weight.numel() // BLOCK_SIZE
     print(f"sm_count         = {sm_count}")
