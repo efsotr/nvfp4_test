@@ -20,12 +20,12 @@ UPPER_BOUND = 7
 PERSISTENT_LAUNCH_BLOCKS_CAP = 4
 
 SCALESWEEP_CONFIGS = [
-    triton.Config({"BLOCKS_PER_PROGRAM": 64}, num_warps=4, num_stages=1),
-    triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=4, num_stages=1),
-    triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=8, num_stages=1),
-    triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=8, num_stages=1),
+    triton.Config({"BLOCKS_PER_PROGRAM": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=8, num_stages=3),
     triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=16, num_stages=1),
-    triton.Config({"BLOCKS_PER_PROGRAM": 512}, num_warps=16, num_stages=1),
+    triton.Config({"BLOCKS_PER_PROGRAM": 512}, num_warps=16, num_stages=3),
 ]
 
 
