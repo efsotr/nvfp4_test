@@ -1,7 +1,5 @@
 import torch
 
-M = 4096
-K = 4096
 SEED = 0
 DTYPE = torch.bfloat16
 DEVICE = "cuda"
@@ -17,7 +15,7 @@ def check_sm100():
     assert major >= 10, f"need SM >= 100, got sm_{major}{minor}"
 
 
-def make_w():
+def make_w(M=4096, K=4096):
     torch.manual_seed(SEED)
     torch.cuda.manual_seed_all(SEED)
     return torch.randn((M, K), device=DEVICE, dtype=DTYPE).contiguous()
@@ -30,7 +28,7 @@ def get_nvfp4_global_scales(x, FP8_MAX=FP8_E4M3_MAX_NVFP4):
     return global_scale, global_scale_inv
 
 
-def time_cuda(fn, warmup=5, iters=20):
+def time_cuda(fn, warmup=10, iters=20):
     for _ in range(warmup):
         out = fn()
     torch.cuda.synchronize()
@@ -111,7 +109,7 @@ def dequantize_4over6_raw(
     out_dtype=torch.float32,
     intermediate_dtype=torch.float16,
 ):
-    from fouroversix.quantize.dequantize_utils import from_blocked, unpack_packed_fp4
+    from fouroversix.quantize.quantized_tensor import from_blocked, unpack_packed_fp4
     from fouroversix.utils import DataType, RoundStyle, ScaleRule
 
     dtype = DataType.nvfp4 if dtype is None else dtype
@@ -126,13 +124,13 @@ def dequantize_4over6_raw(
             scale_factors,
             (
                 padded_shape[0],
-                padded_shape[1] // dtype.block_size,
+                padded_shape[1] // dtype.block_size(),
             ),
         )
     else:
         scales = scale_factors
 
-    scales = scales.to(intermediate_dtype).repeat_interleave(dtype.block_size, -1)
+    scales = scales.to(intermediate_dtype).repeat_interleave(dtype.block_size(), -1)
 
     x = x * scales
 
@@ -140,9 +138,8 @@ def dequantize_4over6_raw(
         x.to(torch.float32)
         * amax.float()
         / (
-            dtype.quantized_value_type.get_maximum_value(scale_rule)
-            * dtype.scale_type.get_maximum_value(scale_rule)
-            * round_style.adjustment_factor
+            6
+            * 256
         )
     ).to(out_dtype)
 
