@@ -111,8 +111,6 @@ def scalesweep_quantize_kernel(
         vals = tl.load(weight_ptr + offsets, mask=mask, other=0.0).to(tl.float32) * global_scale_inv
         base_fp8 = (tl.max(tl.abs(vals), axis=1) / 6.0).to(tl.float8e4nv)
         base_raw = base_fp8.to(tl.uint8, bitcast=True).to(tl.int32)
-        best_mse = tl.full((BLOCKS_PER_PROGRAM,), float("inf"), tl.float32)
-        best_scale_fp8 = tl.full((BLOCKS_PER_PROGRAM,), 0, tl.float8e4nv)
         for i in tl.static_range(0, NUM_CANDIDATES):
             raw_i = tl.minimum(tl.maximum(base_raw + LOWER_BOUND + i, 1), 126).to(tl.uint8)
             scale_fp8 = raw_i.to(tl.float8e4nv, bitcast=True)
@@ -120,9 +118,13 @@ def scalesweep_quantize_kernel(
             q_i = fp32_round_to_fp4_value(vals * (1.0 / scale_i)[:, None])
             err_i = q_i * scale_i[:, None] - vals
             mse_i = tl.sum(err_i * err_i, axis=1)
-            better = mse_i < best_mse
-            best_mse = tl.where(better, mse_i, best_mse)
-            best_scale_fp8 = tl.where(better, scale_fp8, best_scale_fp8)
+            if i > 0:
+                better = mse_i < best_mse
+                best_mse = tl.where(better, mse_i, best_mse)
+                best_scale_fp8 = tl.where(better, scale_fp8, best_scale_fp8)
+            else:
+                best_mse = mse_i
+                best_scale_fp8 = scale_fp8
         tl.store(scale_ptr + block_offsets, best_scale_fp8, mask=block_offsets < num_blocks)
         best_scale_inv = 1.0 / best_scale_fp8.to(tl.float32)
         best_code = fp4_block_code_sim(vals * best_scale_inv[:, None], BLOCK_SIZE)
