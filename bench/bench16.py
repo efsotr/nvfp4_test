@@ -1,5 +1,6 @@
 import argparse
 parser = argparse.ArgumentParser()
+parser.add_argument("--dim", type=int, default=8192)
 parser.add_argument("--load", type=str, choices=["default", "sep", "trans"], default="sep")
 parser.add_argument("--mse", type=str, choices=["direct", "default"], default="default")
 args = parser.parse_args()
@@ -41,11 +42,11 @@ elif args.mse == "direct":
 else:
     raise NotImplementedError(f"unsupported --mse {args.mse}")
 
+import torch
 sm_count = torch.cuda.get_device_properties("cuda").multi_processor_count
 NUM_PROGRAMS_LIST = [sm_count, sm_count * 2, sm_count * 4]
 bsz_list = [1, 16, 32, 64, 128, 256, 512, 1024, 4096, 8192]
 
-import torch
 import triton
 import triton.language as tl
 
@@ -226,7 +227,7 @@ def main():
     for NUM_PROGRAMS in NUM_PROGRAMS_LIST:
         print(f"NUM_PROGRAMS = {NUM_PROGRAMS}")
         for bsz in bsz_list:
-            weight = make_w(bsz, 8192)
+            weight = make_w(bsz, args.dim)
             global_scale, global_scale_inv = get_nvfp4_global_scales(weight, FP8_MAX=256)
 
             (scale, code), ms = time_cuda(
