@@ -292,7 +292,7 @@ def _fp32x16_to_e2m1_roundtrip_se(
     sCD = _fp32_pair_to_e2m1_roundtrip_se(x12, x13)
     sEF = _fp32_pair_to_e2m1_roundtrip_se(x14, x15)
 
-    return s01 + s23 + s45 + s67 + s89 + sAB + sCD + sEF
+    return ((s01 + s23) + (s45 + s67)) + ((s89 + sAB) + (sCD + sEF))
 
 
 @triton.jit
