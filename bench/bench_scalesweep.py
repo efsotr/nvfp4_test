@@ -20,10 +20,12 @@ UPPER_BOUND = 7
 PERSISTENT_LAUNCH_BLOCKS_CAP = 4
 
 SCALESWEEP_CONFIGS = [
-    triton.Config({"BLOCKS_PER_PROGRAM": 64}, num_warps=4, num_stages=3),
-    triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=4, num_stages=3),
-    triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=8, num_stages=3),
-    triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCKS_PER_PROGRAM": 64}, num_warps=4, num_stages=1),
+    triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=4, num_stages=1),
+    triton.Config({"BLOCKS_PER_PROGRAM": 128}, num_warps=8, num_stages=1),
+    triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=8, num_stages=1),
+    triton.Config({"BLOCKS_PER_PROGRAM": 256}, num_warps=16, num_stages=1),
+    triton.Config({"BLOCKS_PER_PROGRAM": 512}, num_warps=16, num_stages=1),
 ]
 
 
@@ -157,8 +159,12 @@ def main():
     # check_sm100()
     weight = make_w()
     global_scale, global_scale_inv = get_nvfp4_global_scales(weight)
+    sm_count = torch.cuda.get_device_properties(weight.device).multi_processor_count
+    num_blocks = weight.numel() // BLOCK_SIZE
+    print(f"sm_count         = {sm_count}")
 
     for config in SCALESWEEP_CONFIGS:
+        num_programs = persistent_grid(num_blocks, weight.device, config)
         (scale, code), ms = time_cuda(
             lambda: scalesweep_quantize(
                 weight,
@@ -181,7 +187,8 @@ def main():
         blocks_per_program = config.kwargs["BLOCKS_PER_PROGRAM"]
         name = (
             f"triton.ScaleSweep[blocks={blocks_per_program},"
-            f"warps={config.num_warps},stages={config.num_stages}]"
+            f"warps={config.num_warps},stages={config.num_stages},"
+            f"programs={num_programs}]"
         )
         print_result(name, ms, mse, max_abs_error)
 
